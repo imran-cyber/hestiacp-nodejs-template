@@ -1,1 +1,0 @@
-# hestiacp-nodejs-template
