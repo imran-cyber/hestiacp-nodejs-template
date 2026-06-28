@@ -1,0 +1,96 @@
+#=========================================================================#
+# HestiaCP Node.js Template (HTTPS/SSL) - v4.0                          #
+# HestiaCP 1.9.x | Nginx + PHP-FPM (no Apache)                          #
+#                                                                         #
+# ARCHITECTURE:                                                           #
+#   /api/*  → proxy to Node.js backend (port injected by nodejs.sh)      #
+#   /*      → serve React/Vue/static frontend from public_html           #
+#                                                                         #
+# NOTE: ssl_session_cache is intentionally omitted — HestiaCP's          #
+# nginx.conf already declares it globally. Adding it here causes         #
+# "conflicting size" error and nginx crash.                               #
+#=========================================================================#
+
+server {
+    listen      %ip%:%web_ssl_port% ssl;
+    server_name %domain_idn% %alias_idn%;
+    root        %docroot%;
+    index       index.html;
+
+    access_log  /var/log/nginx/domains/%domain%.log combined;
+    error_log   /var/log/nginx/domains/%domain%.error.log error;
+
+    # ---- SSL (HestiaCP managed) ----
+    ssl_certificate      %ssl_pem%;
+    ssl_certificate_key  %ssl_key%;
+
+    ssl_protocols             TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers on;
+    ssl_ciphers               ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384;
+    # ssl_session_cache intentionally omitted — set globally in nginx.conf
+
+    # ---- Security: block hidden & sensitive files ----
+    location ~ /\. {
+        location ~ /\.well-known { allow all; }
+        deny all;
+        return 404;
+    }
+
+    location ~* /(\.env|\.git|node_modules|package\.json|package-lock\.json|yarn\.lock) {
+        deny all;
+        return 403;
+    }
+
+    # ---- HestiaCP internals ----
+    location /vstats/ {
+        alias   %home%/%user%/web/%domain%/stats/;
+        include %home%/%user%/web/%domain%/stats/auth.conf*;
+    }
+
+    location /error/ {
+        alias %home%/%user%/web/%domain%/document_errors/;
+    }
+
+    # ---- Security headers ----
+    add_header X-Frame-Options           "SAMEORIGIN"                      always;
+    add_header X-Content-Type-Options    "nosniff"                         always;
+    add_header X-XSS-Protection          "1; mode=block"                   always;
+    add_header Referrer-Policy           "strict-origin-when-cross-origin" always;
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains; preload" always;
+
+    # ---- Backend: proxy /api/* to Node.js ----
+    location /api/ {
+        proxy_pass         http://127.0.0.1:NODEJS_PORT;
+        proxy_http_version 1.1;
+
+        proxy_set_header   Upgrade    $http_upgrade;
+        proxy_set_header   Connection "upgrade";
+        proxy_set_header   Host              $host;
+        proxy_set_header   X-Real-IP         $remote_addr;
+        proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto $scheme;
+
+        proxy_connect_timeout 60s;
+        proxy_send_timeout    60s;
+        proxy_read_timeout    60s;
+
+        proxy_buffering         on;
+        proxy_buffer_size       4k;
+        proxy_buffers           8 4k;
+        proxy_busy_buffers_size 8k;
+
+        proxy_redirect     off;
+        proxy_cache_bypass $http_upgrade;
+        client_max_body_size 50M;
+
+        proxy_hide_header X-Powered-By;
+        proxy_hide_header Server;
+    }
+
+    # ---- Frontend: serve React/Vue/static from public_html ----
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    include %home%/%user%/conf/web/%domain%/nginx.ssl.conf_*;
+}
